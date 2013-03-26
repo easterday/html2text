@@ -61,6 +61,8 @@ IGNORE_ANCHORS = False
 IGNORE_IMAGES = False
 IGNORE_EMPHASIS = False
 
+MARKDOWN_TABLES = True
+
 ### Entity Nonsense ###
 
 def name2cp(k):
@@ -237,8 +239,10 @@ class HTML2Text(HTMLParser.HTMLParser):
         self.abbr_title = None  # current abbreviation definition
         self.abbr_data = None  # last inner HTML (for abbr being defined)
         self.abbr_list = {}  # stack of abbreviations to write later
-        self.baseurl = baseurl
-
+        self.baseurl = baseurl        
+        self.start_table_header = False  # if True, need to markdown the table header row
+        self.num_table_headers = 0       # the number of table headers to display
+        
         try: del unifiable_n[name2cp('nbsp')]
         except KeyError: pass
         unifiable['nbsp'] = '&nbsp_place_holder;'
@@ -550,8 +554,38 @@ class HTML2Text(HTMLParser.HTMLParser):
                     self.o(str(li['num'])+". ")
                 self.start = 1
 
-        if tag in ["table", "tr"] and start: self.p()
-        if tag == 'td': self.pbr()
+        if not MARKDOWN_TABLES:            
+            if tag in ["table", "tr"] and start: self.p()
+            if tag == 'td': self.pbr()
+        else:
+            if tag == "table" and start:
+                self.start_table_header = True            
+            if tag == "tr":
+                if start:                    
+                    #self.p() #works, b ut adds extra row
+                    #self.soft_br() # breaks mardown
+                    #self.out('\n')
+                    pass
+                else:                
+                    self.o("|")
+                    self.soft_br()
+                    #self.p()
+                    if self.start_table_header:                        
+                        for i in range(self.num_table_headers):
+                            self.o("|:-----")
+                        
+                        self.o("|")
+                        self.soft_br()
+                        #self.p()
+                        
+                        self.start_table_header = False
+                        self.num_table_headers = 0
+            if tag in ['td','th'] and start:                
+                self.o("|")
+                
+                if self.start_table_header == True:
+                    self.num_table_headers += 1
+                
 
         if tag == "pre":
             if start:
@@ -560,6 +594,7 @@ class HTML2Text(HTMLParser.HTMLParser):
             else:
                 self.pre = 0
             self.p()
+
 
     def pbr(self):
         if self.p_p == 0:
@@ -780,6 +815,94 @@ md_backslash_matcher = re.compile(r'''
     ''' % re.escape(slash_chars),
     flags=re.VERBOSE)
 
+
+
+#From http://www.leancrew.com/all-this/2008/08/tables-for-markdown-and-textmate/
+def just(string, type, n):
+    "Justify a string to length n according to type."
+    
+    if type == '::':
+        return string.center(n)
+    elif type == '-:':
+        return string.rjust(n)
+    elif type == ':-':
+        return string.ljust(n)
+    else:
+        return string
+
+# From http://www.leancrew.com/all-this/2008/08/tables-for-markdown-and-textmate/
+def normtable(text):
+    "Aligns the vertical bars in a text table."
+        
+    # Start by turning the text into a list of lines.
+    lines = text.splitlines()
+    rows = len(lines)    
+    
+    # Figure out the cell formatting.
+    # First, find the separator line.
+    for i in range(rows):
+        if set(lines[i]).issubset('|:.-'):
+            formatline = lines[i]
+            formatrow = i
+            break
+    
+    # Delete the separator line from the content.
+    del lines[formatrow]
+    
+    # Determine how each column is to be justified. 
+    formatline = formatline.strip('| ')
+    fstrings = formatline.split('|')
+    justify = []
+    for cell in fstrings:
+        ends = cell[0] + cell[-1]
+        if ends == '::':
+            justify.append('::')
+        elif ends == '-:':
+            justify.append('-:')
+        else:
+            justify.append(':-')
+    
+    # Assume the number of columns in the separator line is the number
+    # for the entire table.
+    columns = len(justify)
+    
+    # Extract the content into a matrix.
+    content = []
+    for line in lines:
+        line = line.strip('| ')
+        cells = line.split('|')
+        # Put exactly one space at each end as "bumpers."
+        linecontent = [ ' ' + x.strip() + ' ' for x in cells ]
+        content.append(linecontent)
+    
+    # Append cells to rows that don't have enough.
+    rows = len(content)
+    for i in range(rows):
+        while len(content[i]) < columns:
+            content[i].append('')
+    
+    # Get the width of the content in each column. The minimum width will
+    # be 2, because that's the shortest length of a formatting string and
+    # because that matches an empty column with "bumper" spaces.
+    widths = [2] * columns
+    for row in content:
+        for i in range(columns):
+            widths[i] = max(len(row[i]), widths[i])
+    
+    # Add whitespace to make all the columns the same width and 
+    formatted = []
+    for row in content:
+        formatted.append('|' + '|'.join([ just(s, t, n) for (s, t, n) in zip(row, justify, widths) ]) + '|')
+    
+    # Recreate the format line with the appropriate column widths.
+    formatline = '|' + '|'.join([ s[0] + '-'*(n-2) + s[-1] for (s, n) in zip(justify, widths) ]) + '|'
+    
+    # Insert the formatline back into the table.
+    formatted.insert(formatrow, formatline)
+    
+    # Return the formatted table.
+    return '\n'.join(formatted)
+
 def skipwrap(para):
     # If the text begins with four spaces or one tab, it's a code block; don't wrap
     if para[0:4] == '    ' or para[0] == '\t':
@@ -808,8 +931,12 @@ def wrapwrite(text):
         sys.stdout.write(text)
 
 def html2text(html, baseurl=''):
-    h = HTML2Text(baseurl=baseurl)
-    return h.handle(html)
+    h = HTML2Text(baseurl=baseurl)    
+    h = h.handle(html)    
+    #print(h)
+    #if MARKDOWN_TABLES:
+    #    h = normtable(h)
+    return h
 
 def unescape(s, unicode_snob=False):
     h = HTML2Text()
